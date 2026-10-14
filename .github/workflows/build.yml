@@ -61,7 +61,7 @@ jobs:
       - name: Syntax
         run: for f in src/*.js src/vendor/*/*.js; do node --check "$f"; done
       - name: Unit tests
-        run: node --test tests/
+        run: node --test tests/*.test.mjs
 
       # --- Release (tags only) ---
       - name: Package

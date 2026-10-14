@@ -35,7 +35,7 @@ or build them yourself:
 build/build-tailscale.sh           # Go 1.27.2:  tailscale f61c8685 + build/patches/tailscale
 build/build-webtor.sh              # rustup + wasm-bindgen-cli 0.2.106 + clang:
                                    #   webtor-rs cba29fb4 + build/patches/webtor-rs
-node --test tests/                 # unit tests
+node --test tests/*.test.mjs       # unit tests
 ```
 
 Each build writes `src/vendor/*/BUILD.txt` with versions and checksums. The Tor build refuses to

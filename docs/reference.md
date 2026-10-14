@@ -123,7 +123,7 @@ See each `src/vendor/*/PROVENANCE.md` for exact upstream commits and hashes.
 ## Tests and demo
 
 ```sh
-node --test tests/         # HTTP layer, pool, network (fake tor/tailscale), tor cache, preconnect
+node --test tests/*.test.mjs   # HTTP layer, pool, network (fake tor/tailscale), tor cache, preconnect
 ```
 
 `demo/index.html` is a self-contained page (no external scripts): pick a transport, sign in to
