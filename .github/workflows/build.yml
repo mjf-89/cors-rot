@@ -1,0 +1,103 @@
+name: Build WASM
+
+# Builds the two vendored WebAssembly clients from pinned upstream sources + the patches in
+# build/patches, runs the tests, and on a version tag (v*) publishes them as release assets.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  webtor:
+    name: Tor client (webtor-rs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/wasm-bindgen*
+            ~/.cargo/registry
+            ~/.cargo/git
+            .work/webtor-rs/target
+          key: webtor-${{ hashFiles('build/build-webtor.sh', 'build/patches/webtor-rs/**') }}
+          restore-keys: webtor-
+      - name: Install wasm-bindgen-cli 0.2.106
+        run: command -v wasm-bindgen >/dev/null && [ "$(wasm-bindgen --version)" = "wasm-bindgen 0.2.106" ] || cargo install wasm-bindgen-cli --version 0.2.106 --locked
+      - name: Build
+        run: build/build-webtor.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webtor
+          path: vendor/webtor
+          if-no-files-found: error
+
+  tailscale:
+    name: Tailscale client (tsconnect)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: tailscale-${{ hashFiles('build/build-tailscale.sh', 'build/patches/tailscale/**') }}
+          restore-keys: tailscale-
+      - name: Build
+        run: build/build-tailscale.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale
+          path: vendor/tailscale
+          if-no-files-found: error
+
+  test:
+    name: Tests
+    needs: [webtor, tailscale]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with: { name: webtor, path: vendor/webtor }
+      - uses: actions/download-artifact@v4
+        with: { name: tailscale, path: vendor/tailscale }
+      - name: Syntax
+        run: for f in *.js vendor/*/*.js; do node --check "$f"; done
+      - name: Unit tests
+        run: node --test tests/
+
+  release:
+    name: Release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: webtor, path: vendor/webtor }
+      - uses: actions/download-artifact@v4
+        with: { name: tailscale, path: vendor/tailscale }
+      - name: Package
+        run: |
+          tar -czf cors-rot-vendor.tar.gz vendor/webtor vendor/tailscale
+          sha256sum cors-rot-vendor.tar.gz > cors-rot-vendor.tar.gz.sha256
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" cors-rot-vendor.tar.gz cors-rot-vendor.tar.gz.sha256 --repo "$GITHUB_REPOSITORY" --generate-notes

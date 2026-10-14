@@ -1,0 +1,7 @@
+{
+  "name": "cors-rot",
+  "private": true,
+  "type": "module",
+  "description": "Experimental: fetch and raw TCP/TLS from a web page through your own Tailscale exit node or Tor (Snowflake). Not published to npm on purpose.",
+  "license": "MIT"
+}

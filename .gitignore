@@ -1,0 +1,10 @@
+# Built by build/build-*.sh or downloaded by scripts/fetch-vendor.sh (see .github/workflows/build.yml)
+/.work/
+/vendor/webtor/webtor_wasm*
+/vendor/webtor/package.json
+/vendor/webtor/BUILD.txt
+/vendor/webtor/snippets/
+/vendor/tailscale/tailscale.wasm
+/vendor/tailscale/wasm_exec.js
+/vendor/tailscale/BUILD.txt
+node_modules/
