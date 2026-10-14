@@ -7,4 +7,5 @@ their security content. File paths in them refer to that project's layout:
 
 - `tor-client-security-remediation.md`: the original client's TLS and directory flaws and every fix
   (sections 1–10), with the remaining unaudited limits.
+- `reference.md`: API, how it works, who sees what, security notes, licenses.
 - `tor-client-recovery.md`, `tor-client-provenance.md`: build provenance and the first recovery pass.

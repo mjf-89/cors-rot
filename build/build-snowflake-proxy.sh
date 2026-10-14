@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PIN=853070e56e4c7b8a3747997ec03a8f859d436555
-WORK=${WORK:-"$ROOT/.work"}; SRC="$WORK/snowflake-webext"; DEST="$ROOT/vendor/snowflake-proxy"
+WORK=${WORK:-"$ROOT/.work"}; SRC="$WORK/snowflake-webext"; DEST="$ROOT/src/vendor/snowflake-proxy"
 mkdir -p "$WORK"
 [ -d "$SRC/.git" ] || { git init -q "$SRC"; git -C "$SRC" remote add origin https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake-webext.git; }
 git -C "$SRC" fetch -q --depth 1 origin "$PIN" && git -C "$SRC" checkout -q --force "$PIN"

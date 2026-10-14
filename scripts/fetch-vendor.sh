@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download the prebuilt WebAssembly clients (vendor/webtor, vendor/tailscale) from a GitHub release
+# Download the prebuilt WebAssembly clients (src/vendor/webtor, src/vendor/tailscale) from a GitHub release
 # of this repository and verify their checksum. Usage: scripts/fetch-vendor.sh [tag]   (default: latest)
 # For a private repository set GH_TOKEN (a token with read access); uses the GitHub CLI if present.
 set -euo pipefail
@@ -20,4 +20,4 @@ else
 fi
 sha256sum -c cors-rot-vendor.tar.gz.sha256
 tar -xzf cors-rot-vendor.tar.gz -C "$ROOT"
-echo "Vendor files installed into $ROOT/vendor"
+echo "Vendor files installed into $ROOT/src/vendor"

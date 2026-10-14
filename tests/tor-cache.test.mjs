@@ -1,7 +1,7 @@
-// IndexedDB cache of the authenticated Tor directory (../tor-cache.js).
+// IndexedDB cache of the authenticated Tor directory (../src/tor-cache.js).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadTorDirectory, saveTorDirectory } from "../tor-cache.js";
+import { loadTorDirectory, saveTorDirectory } from "../src/tor-cache.js";
 
 // Minimal async IndexedDB stand-in (stores values by reference, like IDB stores Blobs).
 function fakeIndexedDb() {

@@ -2,9 +2,9 @@
 // Two transports only (tailscale|tor); there is no direct/auto route to test.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createBrowserNetwork, createTorClientOptions } from '../network.js';
+import { createBrowserNetwork, createTorClientOptions } from '../src/network.js';
 import { readFile } from 'node:fs/promises';
-import { requestHttp } from '../http-stream.js';
+import { requestHttp } from '../src/http-stream.js';
 
 const encode = (text) => new TextEncoder().encode(text);
 const decode = (bytes) => new TextDecoder().decode(bytes);
@@ -360,14 +360,14 @@ test('pathological empty stream reads are bounded instead of starving deadlines'
 test('offline production WASM loader options supply a Snowflake URL and retain the consumed builder result', async () => {
   // Read the actual browser deployment artifacts. No smoke/test WASM adapters,
   // no TorClient construction, no gate override, and no network are involved.
-  const binary = await readFile(new URL('../vendor/webtor/webtor_wasm_bg.wasm', import.meta.url));
+  const binary = await readFile(new URL('../src/vendor/webtor/webtor_wasm_bg.wasm', import.meta.url));
   const saved = new Map(['fetch', 'WebSocket', 'RTCPeerConnection'].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   let networkAttempts = 0;
   function denyNetwork() { networkAttempts++; throw new Error('Offline option regression attempted network access'); }
   let options, configured;
   try {
     for (const name of saved.keys()) Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: denyNetwork });
-    const module = await import('../vendor/webtor/webtor_wasm.js');
+    const module = await import('../src/vendor/webtor/webtor_wasm.js');
     assert.equal('smokeStream' in module, false);
     assert.equal('smokeTls' in module, false);
     await module.default({ module_or_path: binary });

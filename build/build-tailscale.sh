@@ -8,7 +8,7 @@ PIN=f61c86852783a963d96cd0a4c913f886472478d1
 WORK=${WORK:-"$ROOT/.work"}
 SRC="$WORK/tailscale"
 PATCH="$ROOT/build/patches/tailscale/wasm_js.go.patch"
-DEST="$ROOT/vendor/tailscale"
+DEST="$ROOT/src/vendor/tailscale"
 
 echo "Go: $(go version)"
 mkdir -p "$WORK"

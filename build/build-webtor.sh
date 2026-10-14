@@ -9,7 +9,7 @@ TOOLCHAIN=nightly-2026-01-05
 WORK=${WORK:-"$ROOT/.work"}
 SRC="$WORK/webtor-rs"
 PATCH="$ROOT/build/patches/webtor-rs/browser-streams-security.patch"
-DEST="$ROOT/vendor/webtor"
+DEST="$ROOT/src/vendor/webtor"
 export CC_wasm32_unknown_unknown=${CC_wasm32_unknown_unknown:-clang}
 
 [[ "$(wasm-bindgen --version)" == "wasm-bindgen 0.2.106" ]] || { echo "Need wasm-bindgen-cli 0.2.106 (cargo install wasm-bindgen-cli --version 0.2.106 --locked)" >&2; exit 1; }
@@ -32,9 +32,12 @@ trap 'rm -rf "$STAGE"' EXIT
 wasm-bindgen --target web --out-name webtor_wasm --out-dir "$STAGE" "$SRC/target/wasm32-unknown-unknown/release/webtor_wasm.wasm"
 
 # Production exports must equal the reviewed allowlist (no test-only hooks can ship).
+# wasm-bindgen's internal closure glue names embed 16-hex-digit crate hashes that depend on the build
+# machine and path; they are masked as _H_ on both sides, so only real API differences fail the build.
 ALLOW="$ROOT/build/patches/webtor-rs/production-exports"
-cmp <(grep -oE '^export (async )?(function|class|const|let) [A-Za-z0-9_]+|^export \{[^}]*\}' "$STAGE/webtor_wasm.js" | sort) "$ALLOW.js.txt"
-cmp <(grep -oE 'export const [a-zA-Z0-9_]+' "$STAGE/webtor_wasm_bg.wasm.d.ts" | sort) "$ALLOW.wasm.txt"
+mask() { sed -E 's/_[0-9a-f]{16}_/_H_/g' | sort; }
+diff <(grep -oE '^export (async )?(function|class|const|let) [A-Za-z0-9_]+|^export \{[^}]*\}' "$STAGE/webtor_wasm.js" | mask) <(mask < "$ALLOW.js.txt")
+diff <(grep -oE 'export const [a-zA-Z0-9_]+' "$STAGE/webtor_wasm_bg.wasm.d.ts" | mask) <(mask < "$ALLOW.wasm.txt")
 
 mkdir -p "$DEST"
 rm -rf "$DEST/snippets"
