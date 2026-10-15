@@ -2,7 +2,9 @@
 // proxy runs in a hidden frame (snowflake-proxy.html) and relays encrypted Tor traffic for people in
 // censored countries. It starts when 'tor' is selected and stops when 'tailscale' is selected. There
 // is no off switch. It never connects to websites. The host app renders the status; this module only
-// manages the frame. See createCorsRot() in ./index.js, which wires it to the network's status.
+// manages the frame. stop() removes the frame (closing its WebRTC/WebSocket connections and timers; the
+// proxy stays down until Tor is switched away from and back, or a new Tor start begins); dispose() also detaches the manager from the
+// network and the window for good. See createCorsRot() in ./index.js, which wires it to the network's status.
 //
 // NOTE (Snowflake infrastructure): the Snowflake project asks that applications not share its
 // public infrastructure between different kinds of applications. Deployments should run their own
@@ -13,6 +15,13 @@ export function createSnowflakeProxy({ network, document = globalThis.document }
   const listeners = new Set();
   let status = { state: "stopped", clients: 0, helped: 0, bytes: 0 };
   let active = false;
+  let disposed = false;
+  let held = false; // after stop(): stay down until Tor is switched away from, or a new Tor start begins
+  const wantsRun = (s) => {
+    const tor = s?.mode === "tor" || s?.transport === "tor";
+    if (!tor || s?.torState === "initializing") held = false;
+    return tor && !held;
+  };
   try { globalThis.localStorage?.removeItem(OLD_OFF_KEY); } catch { /* storage unavailable */ }
 
   const view = () => ({ ...status, active });
@@ -20,12 +29,16 @@ export function createSnowflakeProxy({ network, document = globalThis.document }
 
   // Without a document (e.g. unit tests / non-DOM hosts) the manager is inert but still tracks state.
   if (!document?.createElement) {
-    const follow = (s) => { const shouldRun = s?.mode === "tor" || s?.transport === "tor"; if (shouldRun !== active) { active = shouldRun; notify(); } };
+    const follow = (s) => { if (disposed) return; const shouldRun = wantsRun(s); if (shouldRun !== active) { active = shouldRun; notify(); } };
     void network?.getStatus?.().then?.(follow)?.catch?.(() => {});
-    try { network?.subscribe?.(follow); } catch { /* ignore */ }
+    let unfollow;
+    try { unfollow = network?.subscribe?.(follow); } catch { /* ignore */ }
+    const halt = () => { if (active) { active = false; status = { ...status, state: "stopped", clients: 0 }; notify(); } };
     return {
       getStatus: view,
       subscribe(listener) { listeners.add(listener); listener(view()); return () => listeners.delete(listener); },
+      stop() { held = true; halt(); },
+      dispose() { halt(); try { unfollow?.(); } catch { /* ignore */ } disposed = true; listeners.clear(); },
     };
   }
 
@@ -56,7 +69,7 @@ export function createSnowflakeProxy({ network, document = globalThis.document }
     notify();
   }
 
-  addEventListener("message", (event) => {
+  const onMessage = (event) => {
     if (!frame || event.origin !== origin || event.source !== frame.contentWindow) return;
     if (event.data?.type !== "snowflake-proxy-status") return;
     const first = !frameReady;
@@ -65,20 +78,32 @@ export function createSnowflakeProxy({ network, document = globalThis.document }
     status = { ...event.data };
     if (first) frame.contentWindow?.postMessage({ type: "snowflake-proxy-control", action: "start" }, origin);
     notify();
-  });
+  };
+  addEventListener("message", onMessage);
 
   const follow = (s) => {
-    const shouldRun = s?.mode === "tor" || s?.transport === "tor";
+    if (disposed) return;
+    const shouldRun = wantsRun(s);
     if (shouldRun === active) return;
     active = shouldRun;
     if (active) start(); else stop();
     notify();
   };
   void network?.getStatus?.().then?.(follow)?.catch?.(() => {});
-  try { network?.subscribe?.(follow); } catch { /* ignore */ }
+  let unfollow;
+  try { unfollow = network?.subscribe?.(follow); } catch { /* ignore */ }
 
   return {
     getStatus: view,
     subscribe(listener) { listeners.add(listener); listener(view()); return () => listeners.delete(listener); },
+    /** Removes the proxy frame now. It stays down until Tor is switched away from and back, or a new Tor start begins (new frame). */
+    stop() { held = true; active = false; stop(); notify(); },
+    /** stop() for good: also detaches from the network and the window and drops the listeners. */
+    dispose() {
+      disposed = true; active = false; stop();
+      try { unfollow?.(); } catch { /* ignore */ }
+      try { removeEventListener("message", onMessage); } catch { /* ignore */ }
+      notify(); listeners.clear();
+    },
   };
 }

@@ -50,10 +50,18 @@ import { createCorsRot } from './cors-rot/src/index.js';
 
 const net = createCorsRot({ transport: 'tailscale' });   // or 'tor'
 net.tailscale.subscribe((s) => s.loginURL && showSignInLink(s.loginURL));
+// or sign in without a link, with a pre-authorized key (string or function; never logged or exposed):
+//   createCorsRot({ tailscale: { authKey: 'tskey-auth-…' } })
 
 const response = await net.fetch('https://api.example.com/v1/thing');   // streaming Response
 const socket = await net.connect('example.com', 443, { tls: true });     // read() / write() / close()
 ```
+
+When you are done (or want a clean restart), `await net.stop()` releases the Tor client, the Tailscale
+node (this logs it out) and the Snowflake proxy frame, and a later start works again; `await net.dispose()`
+also drops listeners. Each transport has its own `net.tailscale.stop()`, `net.tor.stop()`,
+`net.snowflakeProxy.stop()`. `warmUp()` reports a failing start in `getStatus()` instead of throwing
+unhandled. Details: [`docs/reference.md`](docs/reference.md).
 
 `demo/index.html` shows both transports. API, how it works, who can see what, security notes and
 licenses: [`docs/reference.md`](docs/reference.md).

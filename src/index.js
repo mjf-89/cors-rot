@@ -27,7 +27,9 @@ export { createGitHttp } from './git-http.js';
  *
  * options:
  *   transport   'tailscale' (default) | 'tor'
- *   tailscale   { storage, hostname }         forwarded to the Tailscale manager
+ *   tailscale   { storage, hostname, authKey } forwarded to the Tailscale manager. authKey (optional) is a
+ *               pre-authorized key (string, or a function returning one / a promise of one); without it the
+ *               node asks for the interactive sign-in link (status.loginURL). Never logged or exposed.
  *   tor         { ... }                       forwarded to the network (timeoutMs, maxRedirects, ...)
  *   onStatus    (snapshot) => void            network status observer
  *   timeoutMs   per setup stage / HTTP exchange (default 120000)
@@ -40,12 +42,16 @@ export { createGitHttp } from './git-http.js';
  *   fetchTor(input, init)       explicit Tor, regardless of the selected transport
  *   connect(host, port, {tls})  raw stream through the selected transport
  *   preconnect(url)             warm a connection into the keep-alive pool
- *   warmUp()                    start the selected transport in the background
+ *   warmUp()                    start the selected transport in the background (a failing start is
+ *                               reported in getStatus().tailscaleStartError / torState, never unhandled)
  *   setTransport(name)          'tailscale' | 'tor'
  *   getStatus()                 status snapshot (includes `transport`)
  *   subscribe(cb)               status subscription; returns an unsubscribe function
- *   tailscale                   { start, getStatus, subscribe, setExitNode, login, logout }
- *   snowflakeProxy              { getStatus, subscribe }
+ *   tailscale                   { start, stop, dispose, setAuthKey, getStatus, subscribe, setExitNode, login, logout }
+ *   tor                         { stop }  releases the Tor client; the next Tor use bootstraps a new one
+ *   snowflakeProxy              { getStatus, subscribe, stop, dispose }
+ *   stop()                      stops the Tor client, the Tailscale node and the Snowflake proxy frame
+ *   dispose()                   stop() + drop all listeners/pools; create a new instance afterwards
  *   network                     the lower-level network object (fetchTor, getMode, ...)
  */
 export function createCorsRot({
@@ -70,6 +76,7 @@ export function createCorsRot({
   });
   const snowflakeProxy = createSnowflakeProxy({ network, document });
 
+  const stopProxy = () => snowflakeProxy.stop();
   return {
     fetch: (input, init) => network.fetch(input, init),
     fetchTor: (input, init) => network.fetchTor(input, init),
@@ -79,8 +86,14 @@ export function createCorsRot({
     setTransport: (name) => network.setMode(name),
     getStatus: () => network.getStatus(),
     subscribe: (cb) => network.subscribe(cb),
+    stop: async () => { await Promise.all([network.stopTor(), ts.stop()]); stopProxy(); },
+    dispose: async () => { snowflakeProxy.dispose(); await Promise.all([network.dispose(), ts.dispose()]); },
+    tor: { stop: () => network.stopTor() },
     tailscale: {
       start: () => ts.start(),
+      stop: () => ts.stop(),
+      dispose: () => ts.dispose(),
+      setAuthKey: (key) => ts.setAuthKey(key),
       getStatus: () => ts.getStatus(),
       subscribe: (cb) => ts.subscribe(cb),
       setExitNode: (id) => ts.setExitNode(id),

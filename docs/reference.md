@@ -6,7 +6,7 @@ Details behind the short [README](../README.md).
 
 ### `createCorsRot(options) -> net`
 
-Options: `transport` (`'tailscale'` default | `'tor'`), `tailscale` (`{ storage, hostname }`),
+Options: `transport` (`'tailscale'` default | `'tor'`), `tailscale` (`{ storage, hostname, authKey }`),
 `tor` (forwarded to the network: `timeoutMs`, `maxRedirects`, `maxHeaderBytes`,
 `maxRequestBodyBytes`, `bootstrapTimeoutMs`, `keepAlive`), `onStatus(snapshot)`, `timeoutMs`,
 `nativeFetch` (default `globalThis.fetch`, used for same-origin and WASM loading only), `keepAlive`,
@@ -20,13 +20,47 @@ Options: `transport` (`'tailscale'` default | `'tor'`), `tailscale` (`{ storage,
 | `fetchTor(input, init)` | Explicit Tor, regardless of the selected transport. |
 | `connect(host, port, { tls })` | Raw stream (`read()`/`write(bytes)`/`close()`) through the selected transport. |
 | `preconnect(url)` | Warm a keep-alive connection to `url`'s origin. |
-| `warmUp()` | Start the selected transport in the background. |
+| `warmUp()` | Start the selected transport in the background. A failing start never becomes an unhandled rejection: it shows up in `getStatus().tailscaleStartError` (Tailscale; the manager's own status is `state: 'error'` + `error`) or `torState: 'error'` + `lastStartError` (Tor). |
 | `setTransport(name)` | `'tailscale'` \| `'tor'`; starts/stops the Snowflake proxy. |
 | `getStatus()` | Snapshot (`transport`, `torState`, `progress`, `recentTorRequests`, …). |
 | `subscribe(cb)` | Status subscription; returns an unsubscribe function. |
-| `tailscale` | `{ start, getStatus, subscribe, setExitNode, login, logout }`. |
-| `snowflakeProxy` | `{ getStatus, subscribe }` (status of the give-back proxy). |
+| `tailscale` | `{ start, stop, dispose, setAuthKey, getStatus, subscribe, setExitNode, login, logout }`. |
+| `tor` | `{ stop }`: see *Stopping and disposing* below. |
+| `snowflakeProxy` | `{ getStatus, subscribe, stop, dispose }` (status of the give-back proxy). |
+| `stop()` | Async. Stops the Tor client, the Tailscale node and the Snowflake proxy frame; everything can be started again. |
+| `dispose()` | Async. `stop()` plus dropping every listener and pool. Create a new instance afterwards. |
 | `network` | The lower-level network object. |
+
+### Tailscale sign-in: link or auth key
+
+By default the node asks Tailscale for an interactive sign-in link (`net.tailscale.getStatus().loginURL`).
+Optionally pass a **pre-authorized auth key** instead (create one in the admin console, Settings → Keys;
+a reusable *ephemeral* key is the usual choice):
+
+```js
+createCorsRot({ tailscale: { authKey: 'tskey-auth-…' } });          // a string
+createCorsRot({ tailscale: { authKey: async () => await getKey() } }); // or a function (may be async)
+net.tailscale.setAuthKey(key);   // sets/removes the key for the NEXT start()
+```
+
+With a key the node signs in by itself; without one nothing changes. The key is handed to the Tailscale
+client only: it is **not** part of `getStatus()` (which only says `usingAuthKey: true|false`), not logged, not
+stored by cors-rot and removed from error messages. Where you keep it is your decision (the page that
+supplies it can read it, like any page secret). The node's own state (machine/node keys) still goes to
+`tailscale.storage`.
+
+### Stopping and disposing
+
+| Call | Releases |
+| --- | --- |
+| `net.tailscale.stop()` | The in-page Tailscale node (calls the client's `close()`, which **logs the node out**), its connections and keep-alive pool entries, and the locally stored node state. Status goes to `off`. A later `start()`/`warmUp()`/`fetch` creates a fresh node (needs the auth key or a new sign-in link). Safe while a start is still running (that start rejects, and its late client is closed). |
+| `net.tor.stop()` (`network.stopTor()`) | The Tor client (`close()`/`free()` when it has them), the Tor keep-alive pool and startup timers. `torState` returns to `idle`; the next Tor use bootstraps a new client. Also safe during bootstrap. |
+| `net.snowflakeProxy.stop()` | Removes the hidden proxy frame, which closes its WebRTC/WebSocket connections and timers. It stays down until Tor is switched away from and back, or a new Tor start begins. `dispose()` also detaches it from the network and the window for good. |
+| `net.stop()` | All of the above. |
+| `net.dispose()` | `stop()` plus status listeners and pools dropped (`tailscale.dispose()`, `snowflakeProxy.dispose()`, `network.dispose()`). |
+
+All are idempotent. The Snowflake proxy normally follows the selected transport; there is still no
+user-facing off switch for it while Tor is in use, `stop()` is for tearing the stack down.
 
 ### Lower-level exports (`src/index.js`)
 

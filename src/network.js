@@ -148,6 +148,8 @@ export function createBrowserNetwork(options = {}) {
   if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 32) throw new TypeError('Invalid maxHeaderBytes');
   if (!Number.isSafeInteger(maxRequestBodyBytes) || maxRequestBodyBytes < 0) throw new TypeError('Invalid maxRequestBodyBytes');
   let clientPromise;
+  let torGeneration = 0;      // bumped by stopTor(): a start that finishes later releases its client instead
+  let lastTailscaleError = null;
   // Startup progress shown in the UI: { phase, done, total, since } while starting, else null.
   let progress = null;
   let progressTimer;
@@ -191,6 +193,7 @@ export function createBrowserNetwork(options = {}) {
     mode, transport: mode, torState,
     progress: progress && { ...progress }, lastStartError: torState === 'error' ? lastStartError : null,
     lastStartMs,
+    tailscaleStartError: lastTailscaleError,
     recentTorRequests: timings.map((t) => ({ ...t })),
     torAvailable: torState !== 'blocked',
     message: mode === 'tailscale' ? 'Everything through your Tailscale exit node.'
@@ -207,13 +210,15 @@ export function createBrowserNetwork(options = {}) {
       progress = { phase: 'loading', since: Date.now() };
       notify();
       pool?.clear();
+      const generation = torGeneration;
       clientPromise = Promise.resolve().then(() => (options.createTorClient || defaultClient)({
         nativeFetch, moduleUrl: MODULE_URL.href, wasmUrl: WASM_URL.href, onProgress,
         onPhase: (phase) => { if (progress) setProgress({ phase }); },
       })).then(async (client) => {
         if (progress?.phase === 'loading' || progress?.phase === 'bridge') setProgress({ phase: 'circuit' });
         if (typeof client?.waitForCircuit !== 'function') throw new TypeError('Invalid Tor client API');
-        await client.waitForCircuit();
+        try { await client.waitForCircuit(); } catch (error) { releaseTorClient(client); throw error; }
+        if (generation !== torGeneration) { releaseTorClient(client); throw new Error('Tor was stopped while starting'); }
         void persistDirectory(client);
         lastStartMs = progress?.since ? Date.now() - progress.since : null;
         progress = null;
@@ -221,6 +226,7 @@ export function createBrowserNetwork(options = {}) {
         notify();
         return client;
       }).catch((error) => {
+        if (generation !== torGeneration) throw error; // stopTor() already reset the state
         clientPromise = undefined;
         pool?.clear();
         progress = null;
@@ -231,6 +237,33 @@ export function createBrowserNetwork(options = {}) {
       });
     }
     return clientPromise;
+  }
+  // Frees what a Tor client holds (WASM memory, circuits, the bridge WebSocket) when the client offers it.
+  function releaseTorClient(client) {
+    for (const name of ['close', 'free']) {
+      try { const result = client?.[name]?.(); if (result?.catch) result.catch(() => {}); } catch { /* already released */ }
+    }
+  }
+  /**
+   * Stops the Tor client: closes pooled connections, releases the client (close()/free() when it has them) and
+   * returns to the idle state so that the next Tor request or warmUp() bootstraps a fresh client. Also
+   * safe while a start is in progress (that start rejects and its client is released). Idempotent.
+   */
+  async function stopTor() {
+    torGeneration++;
+    const pending = clientPromise;
+    clientPromise = undefined;
+    clearTimeout(progressTimer); progressTimer = undefined;
+    progress = null; lastStartError = null; lastStartMs = null;
+    pool?.clear();
+    preconnecting.clear();
+    if (torState !== 'blocked') torState = 'idle';
+    notify();
+    if (pending) {
+      let client;
+      try { client = await pending; } catch { /* a start that was aborted or failed holds nothing */ }
+      releaseTorClient(client);
+    }
   }
 
   function makeRequest(input, init) {
@@ -317,8 +350,13 @@ export function createBrowserNetwork(options = {}) {
     fetchTor,
     // Start the selected transport in the background so the first request does not wait for it.
     warmUp() {
-      if (mode === 'tailscale') tailscale?.start?.();
-      else if (torState !== 'blocked') getClient().catch(() => {});
+      if (mode === 'tailscale') {
+        // start() rejects when the node cannot start: report it through the status instead of leaving an
+        // unhandled rejection (the manager's own status carries the same error as state 'error').
+        const failed = (error) => { lastTailscaleError = String(error?.message ?? error).slice(0, 200); notify(); };
+        try { Promise.resolve(tailscale?.start?.()).then(() => { if (lastTailscaleError) { lastTailscaleError = null; notify(); } }, failed); }
+        catch (error) { failed(error); }
+      } else if (torState !== 'blocked') getClient().catch(() => {});
       return getStatus();
     },
     /**
@@ -358,6 +396,15 @@ export function createBrowserNetwork(options = {}) {
       } catch (error) {
         return { route, warmed: false, reason: String(error?.message ?? error).slice(0, 120) };
       } finally { preconnecting.delete(`${route} ${key}`); }
+    },
+    /** Stops the Tor client (see stopTor above). The Tailscale manager is owned by its creator: stop it with tailscale.stop(). */
+    stopTor,
+    /** Releases everything this network holds: the Tor client, both keep-alive pools, timers and status listeners. */
+    async dispose() {
+      await stopTor();
+      tsPool?.clear();
+      lastTsClient = undefined;
+      listeners.clear();
     },
     getMode: () => mode,
     getTransport: () => mode,
