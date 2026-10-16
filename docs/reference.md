@@ -147,7 +147,9 @@ Tor Project logos are trademarks of The Tor Project, Inc.; use here does not imp
   `snowflake.js`, `snowflake-proxy.js`, `git-http.js`): MIT.
 - **`src/vendor/webtor`** — patched `webtor-rs` (MIT) embedding **Arti** (MIT/Apache-2.0). Bundled Rust
   crates include **rustls**, **ring**, and **webpki-roots**; see `src/vendor/webtor/licenses/` for the
-  per-crate notices (MPL-2.0 applies to parts of the rustls/webpki-roots stack).
+  notices of the main crates (webpki-roots is CDLA-Permissive-2.0); the complete inventory (all 316 crates,
+  29 Go modules, Go runtime) with licence texts is in `THIRD_PARTY_NOTICES.md` and `third_party/`. Two build-graph
+  crates are MPL-2.0 (`option-ext`, `priority-queue` — elected MPL-2.0 over LGPL), used unmodified.
 - **`src/vendor/tailscale`** — Tailscale `cmd/tsconnect` (BSD-3-Clause), see `src/vendor/tailscale/LICENSE`.
 - **`src/vendor/snowflake-proxy`** — the Tor Project's `snowflake-webext` core (BSD-3-Clause), see
   `src/vendor/snowflake-proxy/LICENSE`.
