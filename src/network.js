@@ -119,7 +119,8 @@ async function defaultClient({ nativeFetch, onProgress = () => {}, onPhase = () 
  * selected transport. No non-idempotent request is ever retried after a failure.
  *
  * options: mode ('tailscale'), nativeFetch, tailscale (a tailscale manager, see ./tailscale.js),
- * timeoutMs (120000, per setup stage / HTTP exchange INCLUDING body), maxRedirects (10),
+ * timeoutMs (120000: per setup stage; within an HTTP exchange the longest time without data sent or
+ * received, so a body that keeps streaming is never cut off), maxRedirects (10),
  * maxHeaderBytes (65536), maxRequestBodyBytes (8 MiB), keepAlive (true), onStatus(snapshot).
  * createTorClient(context) is a trusted dependency-injection hook for deterministic tests; it must
  * NEVER be populated from page/user data. It returns the supplied TorClient API, not a replacement
@@ -308,7 +309,7 @@ export function createBrowserNetwork(options = {}) {
     let method = request.method;
     let headers = new Headers(request.headers);
     for (let redirects = 0;; redirects++) {
-      const response = await requestHttp(client, { url, method, headers, body, signal: request.signal }, { timeoutMs, maxHeaderBytes, pool: viaPool, onTiming: (t) => onTiming({ ...t, via }) });
+      const response = await requestHttp(client, { url, method, headers, body, signal: request.signal }, { timeoutMs, maxHeaderBytes, pool: viaPool, onTiming: (t) => onTiming({ ...t, via }), label: via === 'tailscale' ? 'Tailscale' : 'Tor' });
       if (via === 'tor') void persistDirectory(client); // no-op unless an on-demand refresh installed a newer directory
       const location = response.headers.get('location');
       if (!REDIRECTS.has(response.status) || location === null || request.redirect === 'manual') {

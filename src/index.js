@@ -32,7 +32,7 @@ export { createGitHttp } from './git-http.js';
  *               node asks for the interactive sign-in link (status.loginURL). Never logged or exposed.
  *   tor         { ... }                       forwarded to the network (timeoutMs, maxRedirects, ...)
  *   onStatus    (snapshot) => void            network status observer
- *   timeoutMs   per setup stage / HTTP exchange (default 120000)
+ *   timeoutMs   per setup stage; in an HTTP exchange, the longest time without data (default 120000)
  *   nativeFetch fetch used for same-origin and WASM asset loading (default globalThis.fetch)
  *   keepAlive   false to disable connection pooling
  *   document    DOM document for the Snowflake frame (default globalThis.document)

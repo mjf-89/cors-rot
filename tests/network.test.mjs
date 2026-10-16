@@ -139,6 +139,31 @@ test('timeouts close stalled reads, writes, and unread streaming bodies', async 
   }
 });
 
+test('the HTTP timeout is an inactivity limit: a body that keeps streaming outlives it, a silent one fails naming the transport', async () => {
+  // 40 body pieces 10 ms apart (>= 400 ms in total) with timeoutMs 200: never 200 ms without data.
+  const pieces = Array.from({ length: 40 }, (_, i) => String(i % 10));
+  const paced = (parts, gapMs, stallAtEnd = false) => {
+    const queue = parts.map((part) => encode(part));
+    return { writes: [], closed: 0, async read() { if (!queue.length) return stallAtEnd ? never() : undefined; await sleep(gapMs); return queue.shift(); },
+      async write(bytes) { this.writes.push(bytes.slice()); }, close() { this.closed++; } };
+  };
+  const s = paced([`HTTP/1.1 200 OK\r\nContent-Length: ${pieces.length}\r\n\r\n`, ...pieces], 10);
+  const { network } = setup([s], { timeoutMs: 200 });
+  const started = Date.now();
+  const response = await network.fetchTor('https://example.com');
+  assert.equal(await response.text(), pieces.join(''));
+  assert.ok(Date.now() - started >= 400, 'the exchange lasted longer than timeoutMs');
+  // Silence after the head: TimeoutError, naming the route the request took.
+  const stalled = stream(['HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nab'], { stall: true });
+  const tor = setup([stalled], { timeoutMs: 30 });
+  const body = (await tor.network.fetchTor('https://example.com')).text();
+  await assert.rejects(body, (error) => error.name === 'TimeoutError' && /^Tor HTTP request timed out \(no data for 30 ms\)$/.test(error.message));
+  assert.equal(stalled.closed, 1);
+  const quiet = stream([], { stall: true });
+  await assert.rejects(requestHttp({ connectTls: async () => quiet }, { url: 'https://example.com' }, { timeoutMs: 20, label: 'Tailscale' }),
+    (error) => error.name === 'TimeoutError' && error.message === 'Tailscale HTTP request timed out (no data for 20 ms)');
+});
+
 test('a connect completing after timeout is closed, not leaked', async () => {
   const connect = deferred();
   const s = stream([ok()]);

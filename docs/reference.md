@@ -12,6 +12,12 @@ Options: `transport` (`'tailscale'` default | `'tor'`), `tailscale` (`{ storage,
 `nativeFetch` (default `globalThis.fetch`, used for same-origin and WASM loading only), `keepAlive`,
 `document` (for the Snowflake frame; default `globalThis.document`).
 
+`timeoutMs` (default 120000) limits each setup stage, and within an HTTP exchange the longest time
+without data sent or received: it restarts on every chunk, so a response that keeps streaming (a long
+model reply, a large download) is never cut off, while a connection that stays silent fails with a
+`TimeoutError` naming the transport ("Tor HTTP request timed out (no data for 120 s)"). The body must
+keep being read: an unread body counts as silence.
+
 `net` methods:
 
 | Member | Description |

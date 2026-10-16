@@ -29,7 +29,11 @@ export function validateHeaders(input) {
   return headers;
 }
 
-function lifetime(signal, timeoutMs) {
+const duration = (ms) => ms >= 1000 ? `${Math.round(ms / 1000)} s` : `${ms} ms`;
+
+// One exchange's lifetime. The timeout is an INACTIVITY limit: progress() (bytes received or sent)
+// restarts it, so a response that keeps streaming is never cut off, while a silent connection is.
+function lifetime(signal, timeoutMs, label = '') {
   let stream, closed = false, stopped = false, bodyController, timer;
   let rejectStop;
   const stopPromise = new Promise((_, reject) => { rejectStop = reject; });
@@ -61,11 +65,14 @@ function lifetime(signal, timeoutMs) {
     return closed ? undefined : stream;
   };
   const onAbort = () => stop(abortError());
+  const expire = () => stop(new DOMException(`${label ? `${label} ` : ''}HTTP request timed out (no data for ${duration(timeoutMs)})`, 'TimeoutError'));
   if (signal?.aborted) onAbort();
   else signal?.addEventListener('abort', onAbort, { once: true });
-  if (!stopped) timer = setTimeout(() => stop(new DOMException('Tor HTTP request timed out', 'TimeoutError')), timeoutMs);
+  if (!stopped) timer = setTimeout(expire, timeoutMs);
   return {
     run: (operation) => stopped ? stopPromise : Promise.race([Promise.resolve().then(operation), stopPromise]),
+    // Data moved: restart the inactivity limit.
+    progress() { if (stopped) return; clearTimeout(timer); timer = setTimeout(expire, timeoutMs); },
     attach(value) { stream = value; if (stopped) close(); },
     body(controller) { bodyController = controller; },
     stop,
@@ -83,6 +90,7 @@ class Reader {
       if (value === undefined) return false;
       if (!(value instanceof Uint8Array)) throw protocolError('stream returned non-bytes');
       if (!value.length && ++emptyReads > 1024) throw protocolError('too many empty stream reads');
+      if (value.length) this.life.progress();
       this.received += value.length;
       this.buffer = value;
       this.offset = 0;
@@ -215,7 +223,10 @@ export function poolKey(url) {
   return { key: `${url.protocol}//${host}:${port}`, host, port };
 }
 
-/** One HTTP exchange. Deadline covers connect, writes, headers and body lifetime.
+/** One HTTP exchange. `timeoutMs` is an inactivity limit over connect, writes, headers and the
+ * body: it restarts whenever bytes are received or a request piece is written, so a body that
+ * keeps streaming (e.g. a long model reply) is never cut off, while a connection that stays
+ * silent for `timeoutMs` fails with a TimeoutError naming `label` (the transport, e.g. "Tor").
  * Request bodies must be buffered Uint8Arrays; callers own redirect policy.
  * Cancellation/abort/timeout always closes this exchange's stream, including a
  * connect that resolves after cancellation. HTTPS ONLY uses connectTls.
@@ -224,7 +235,7 @@ export function poolKey(url) {
  * connection, as browsers do; a fresh connection is never retried.
  * `onTiming({ origin, reused, connectMs, firstByteMs })` reports where the time went.
  */
-export async function requestHttp(client, request, { timeoutMs = 120000, maxHeaderBytes = 65536, pool, onTiming } = {}) {
+export async function requestHttp(client, request, { timeoutMs = 120000, maxHeaderBytes = 65536, pool, onTiming, label = '' } = {}) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) throw new TypeError('Invalid timeoutMs');
   if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 32) throw new TypeError('Invalid maxHeaderBytes');
   const url = validateHttpUrl(request.url);
@@ -251,7 +262,7 @@ export async function requestHttp(client, request, { timeoutMs = 120000, maxHead
   }
   head += '\r\n';
   if (head.length > maxHeaderBytes) throw new TypeError('Request headers too large');
-  const life = lifetime(request.signal, timeoutMs);
+  const life = lifetime(request.signal, timeoutMs, label);
   const connect = url.protocol === 'https:' ? client.connectTls : client.connect;
   const host = url.hostname.replace(/^\[|\]$/g, '');
   const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
@@ -272,6 +283,7 @@ export async function requestHttp(client, request, { timeoutMs = 120000, maxHead
       for (let offset = 0; offset < bytes.length; offset += WRITE_CHUNK_BYTES) {
         const piece = bytes.subarray(offset, offset + WRITE_CHUNK_BYTES);
         await life.run(() => stream.write(piece));
+        life.progress();
       }
     };
     await writeAll(encoder.encode(head));
