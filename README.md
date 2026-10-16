@@ -83,5 +83,5 @@ licenses: [`docs/reference.md`](docs/reference.md).
 ## License
 
 MIT for this code ([LICENSE](LICENSE)). Vendored clients keep their licenses: Tor client (webtor-rs
-MIT, Arti MIT/Apache-2.0, rustls/ring/webpki, webpki-roots MPL-2.0), Tailscale BSD-3-Clause,
-Snowflake proxy core BSD-3-Clause. See `src/vendor/*/` and [`docs/reference.md`](docs/reference.md).
+MIT, Arti MIT/Apache-2.0, rustls/ring/webpki, webpki-roots CDLA-Permissive-2.0), Tailscale BSD-3-Clause (plus the Go runtime and 29 Go modules, BSD/MIT/Apache/ISC),
+Snowflake proxy core BSD-3-Clause. Full inventory and licence texts: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and `third_party/` (also inside the release tarball); see also `src/vendor/*/` and [`docs/reference.md`](docs/reference.md).
