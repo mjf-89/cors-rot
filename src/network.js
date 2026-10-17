@@ -23,6 +23,8 @@ const BRIDGE_KEY = 'cors-rot.tor.bridge';
  * The bridge to use. `preference` is a bridge id ('snowflake-01' | 'snowflake-02') or 'random' (default).
  * With 'random' the first start picks one at random and remembers it in `storage` (like Tor's guard: the
  * same first hop afterwards); later starts reuse it. Without usable storage the pick lasts for this page.
+ * When a start on a randomly picked bridge fails, the network retries once on the other bridge and
+ * remembers that one instead (see getClient in createBrowserNetwork).
  */
 export function chooseSnowflakeBridge({ preference = 'random', storage, random = randomIndex } = {}) {
   if (preference !== 'random') {
@@ -35,8 +37,11 @@ export function chooseSnowflakeBridge({ preference = 'random', storage, random =
   const remembered = SNOWFLAKE_BRIDGES.find((b) => b.id === saved);
   if (remembered) return remembered;
   const picked = SNOWFLAKE_BRIDGES[random(SNOWFLAKE_BRIDGES.length)] ?? SNOWFLAKE_BRIDGES[0];
-  try { storage?.setItem(BRIDGE_KEY, picked.id); } catch { /* not persisted */ }
+  rememberBridge(storage, picked);
   return picked;
+}
+function rememberBridge(storage, bridge) {
+  try { storage?.setItem(BRIDGE_KEY, bridge.id); } catch { /* not persisted */ }
 }
 // Spreads load; not a secret, so Math.random is an acceptable fallback where crypto is missing (Node 18).
 function randomIndex(n) {
@@ -183,6 +188,7 @@ export function createBrowserNetwork(options = {}) {
   if (bridgePreference !== 'random' && !SNOWFLAKE_BRIDGES.some((b) => b.id === bridgePreference)) throw new TypeError('Invalid bridge');
   const bridgeStorage = 'storage' in options ? options.storage : (() => { try { return globalThis.localStorage; } catch { return undefined; } })();
   let bridge = null; // chosen on the first Tor start
+  let lastBridgeFailure = null; // { bridge, error } when the last start had to switch bridges
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) throw new TypeError('Invalid timeoutMs');
   if (!Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 20) throw new TypeError('Invalid maxRedirects');
   if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 32) throw new TypeError('Invalid maxHeaderBytes');
@@ -234,6 +240,7 @@ export function createBrowserNetwork(options = {}) {
     progress: progress && { ...progress }, lastStartError: torState === 'error' ? lastStartError : null,
     lastStartMs,
     torBridge: bridge?.id ?? null,
+    torBridgeFailover: lastBridgeFailure && { ...lastBridgeFailure },
     tailscaleStartError: lastTailscaleError,
     recentTorRequests: timings.map((t) => ({ ...t })),
     torAvailable: torState !== 'blocked',
@@ -252,17 +259,33 @@ export function createBrowserNetwork(options = {}) {
       notify();
       pool?.clear();
       const generation = torGeneration;
-      clientPromise = Promise.resolve().then(() => {
-        bridge = chooseSnowflakeBridge({ preference: bridgePreference, storage: bridgeStorage });
+      lastBridgeFailure = null;
+      // One start on one bridge: a client with a circuit, or a rejection (its client released).
+      const startOn = async (chosen) => {
+        bridge = chosen;
         notify();
-        return bridge;
-      }).then((chosen) => (options.createTorClient || defaultClient)({
-        nativeFetch, bridge: chosen, moduleUrl: MODULE_URL.href, wasmUrl: WASM_URL.href, onProgress,
-        onPhase: (phase) => { if (progress) setProgress({ phase }); },
-      })).then(async (client) => {
+        const client = await (options.createTorClient || defaultClient)({
+          nativeFetch, bridge: chosen, moduleUrl: MODULE_URL.href, wasmUrl: WASM_URL.href, onProgress,
+          onPhase: (phase) => { if (progress) setProgress({ phase }); },
+        });
         if (progress?.phase === 'loading' || progress?.phase === 'bridge') setProgress({ phase: 'circuit' });
         if (typeof client?.waitForCircuit !== 'function') throw new TypeError('Invalid Tor client API');
         try { await client.waitForCircuit(); } catch (error) { releaseTorClient(client); throw error; }
+        return client;
+      };
+      clientPromise = Promise.resolve().then(async () => {
+        const first = chooseSnowflakeBridge({ preference: bridgePreference, storage: bridgeStorage });
+        try { return await startOn(first); } catch (error) {
+          // A randomly picked bridge that fails is swapped for the other one, once, within this start;
+          // the bridge that works is remembered. A bridge the caller fixed is never swapped.
+          if (generation !== torGeneration || bridgePreference !== 'random') throw error;
+          const other = SNOWFLAKE_BRIDGES.find((b) => b.id !== first.id);
+          rememberBridge(bridgeStorage, other);
+          lastBridgeFailure = { bridge: first.id, error: String(error?.message ?? error).slice(0, 200) };
+          progress = { phase: 'loading', since: progress?.since ?? Date.now() };
+          return startOn(other);
+        }
+      }).then(async (client) => {
         if (generation !== torGeneration) { releaseTorClient(client); throw new Error('Tor was stopped while starting'); }
         void persistDirectory(client);
         lastStartMs = progress?.since ? Date.now() - progress.since : null;

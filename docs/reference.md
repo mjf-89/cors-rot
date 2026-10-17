@@ -64,8 +64,11 @@ The Tor Project runs two Snowflake bridges, `snowflake-01` (`wss://snowflake.tor
 `cors-rot.tor.bridge` in `tor.storage` (default `localStorage`); later starts, also after reloads, reuse
 it, like Tor's guard. `bridge: 'snowflake-01'` or `'snowflake-02'` fixes the choice. The Tor handshake
 verifies the bridge's identity. `getStatus().torBridge` names the bridge in use (`null` before the first
-start). There is no automatic switch to the other bridge when the chosen one fails; to re-pick, remove
-the stored key. The list is exported as `SNOWFLAKE_BRIDGES`, the choice as `chooseSnowflakeBridge()`.
+start). When a start on the randomly picked bridge fails, the same start tries the other bridge once and
+remembers it if it works (`getStatus().torBridgeFailover` = `{ bridge, error }` of the failed one; it is
+`null` when no switch was needed). A fixed `bridge` is never switched. The retry is part of the same
+start, so a request waiting for it can hit its own `bootstrapTimeoutMs` first; the start keeps going
+and the next request uses it. The list is exported as `SNOWFLAKE_BRIDGES`, the choice as `chooseSnowflakeBridge()`.
 
 ### Stopping and disposing
 

@@ -611,3 +611,73 @@ test('Tor start: the chosen bridge reaches the client factory and the status; br
   await sleep(10);
   assert.equal(received.id, 'snowflake-01');
 });
+
+function bridgeFactory(failing) {
+  const tried = [], released = [];
+  const createTorClient = async ({ bridge }) => {
+    tried.push(bridge.id);
+    const client = { async waitForCircuit() { if (failing.has(bridge.id)) throw new Error(`${bridge.id} down`); }, close() { released.push(bridge.id); } };
+    return client;
+  };
+  return { tried, released, createTorClient };
+}
+
+test('bridge failover: a failing random pick switches to the other bridge in the same start and remembers it', async () => {
+  const storage = memoryStorage({ 'cors-rot.tor.bridge': 'snowflake-01' });
+  const f = bridgeFactory(new Set(['snowflake-01']));
+  const network = createBrowserNetwork({ mode: 'tor', storage, nativeFetch: async () => {}, createTorClient: f.createTorClient });
+  network.warmUp();
+  await sleep(20);
+  assert.deepEqual(f.tried, ['snowflake-01', 'snowflake-02']);
+  assert.deepEqual(f.released, ['snowflake-01'], 'the failed client is released');
+  const s = network.getStatus();
+  assert.equal(s.torState, 'ready');
+  assert.equal(s.torBridge, 'snowflake-02');
+  assert.equal(s.torBridgeFailover.bridge, 'snowflake-01');
+  assert.match(s.torBridgeFailover.error, /snowflake-01 down/);
+  assert.equal(storage.data.get('cors-rot.tor.bridge'), 'snowflake-02', 'the working bridge is remembered');
+  await network.stopTor();
+  network.warmUp();
+  await sleep(20);
+  assert.deepEqual(f.tried, ['snowflake-01', 'snowflake-02', 'snowflake-02'], 'the next start goes straight to the working bridge');
+  assert.equal(network.getStatus().torBridgeFailover, null);
+});
+
+test('bridge failover: both bridges failing is one error, tried once each; the next start alternates', async () => {
+  const storage = memoryStorage({ 'cors-rot.tor.bridge': 'snowflake-02' });
+  const f = bridgeFactory(new Set(['snowflake-01', 'snowflake-02']));
+  const network = createBrowserNetwork({ mode: 'tor', storage, nativeFetch: async () => {}, createTorClient: f.createTorClient });
+  network.warmUp();
+  await sleep(20);
+  assert.deepEqual(f.tried, ['snowflake-02', 'snowflake-01']);
+  assert.equal(network.getStatus().torState, 'error');
+  assert.match(network.getStatus().lastStartError, /snowflake-01 down/);
+  assert.equal(storage.data.get('cors-rot.tor.bridge'), 'snowflake-01');
+  network.warmUp();
+  await sleep(20);
+  assert.deepEqual(f.tried.slice(2), ['snowflake-01', 'snowflake-02']);
+});
+
+test('bridge failover: a fixed bridge is never switched; stopTor() during the first attempt stops the retry', async () => {
+  const f = bridgeFactory(new Set(['snowflake-01']));
+  const storage = memoryStorage();
+  const fixed = createBrowserNetwork({ mode: 'tor', bridge: 'snowflake-01', storage, nativeFetch: async () => {}, createTorClient: f.createTorClient });
+  fixed.warmUp();
+  await sleep(20);
+  assert.deepEqual(f.tried, ['snowflake-01']);
+  assert.equal(fixed.getStatus().torState, 'error');
+  assert.equal(fixed.getStatus().torBridgeFailover, null);
+
+  const gate = deferred();
+  const tried = [];
+  const network = createBrowserNetwork({ mode: 'tor', storage: memoryStorage({ 'cors-rot.tor.bridge': 'snowflake-01' }), nativeFetch: async () => {},
+    createTorClient: async ({ bridge }) => { tried.push(bridge.id); await gate.promise; throw new Error('down'); } });
+  network.warmUp();
+  await sleep(5);
+  const stopped = network.stopTor();
+  gate.resolve();
+  await stopped;
+  await sleep(20);
+  assert.deepEqual(tried, ['snowflake-01'], 'no retry after stop');
+  assert.equal(network.getStatus().torState, 'idle');
+});
