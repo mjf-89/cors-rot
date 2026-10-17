@@ -15,7 +15,7 @@ import { createTailscaleManager } from './tailscale.js';
 import { createSnowflakeProxy } from './snowflake.js';
 
 // Lower-level building blocks, re-exported for advanced callers and tests.
-export { createBrowserNetwork, createTorClientOptions } from './network.js';
+export { createBrowserNetwork, createTorClientOptions, chooseSnowflakeBridge, SNOWFLAKE_BRIDGES } from './network.js';
 export { createConnectionPool, poolKey, requestHttp, validateHeaders, validateHttpUrl } from './http-stream.js';
 export { createTailscaleManager } from './tailscale.js';
 export { createSnowflakeProxy } from './snowflake.js';
@@ -30,7 +30,7 @@ export { createGitHttp } from './git-http.js';
  *   tailscale   { storage, hostname, authKey } forwarded to the Tailscale manager. authKey (optional) is a
  *               pre-authorized key (string, or a function returning one / a promise of one); without it the
  *               node asks for the interactive sign-in link (status.loginURL). Never logged or exposed.
- *   tor         { ... }                       forwarded to the network (timeoutMs, maxRedirects, ...)
+ *   tor         { ... }                       forwarded to the network (timeoutMs, maxRedirects, bridge, storage, ...)
  *   onStatus    (snapshot) => void            network status observer
  *   timeoutMs   per setup stage; in an HTTP exchange, the longest time without data (default 120000)
  *   nativeFetch fetch used for same-origin and WASM asset loading (default globalThis.fetch)

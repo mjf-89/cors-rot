@@ -8,7 +8,8 @@ Details behind the short [README](../README.md).
 
 Options: `transport` (`'tailscale'` default | `'tor'`), `tailscale` (`{ storage, hostname, authKey }`),
 `tor` (forwarded to the network: `timeoutMs`, `maxRedirects`, `maxHeaderBytes`,
-`maxRequestBodyBytes`, `bootstrapTimeoutMs`, `keepAlive`), `onStatus(snapshot)`, `timeoutMs`,
+`maxRequestBodyBytes`, `bootstrapTimeoutMs`, `keepAlive`, `bridge`, `storage`: see *Tor bridge* below),
+`onStatus(snapshot)`, `timeoutMs`,
 `nativeFetch` (default `globalThis.fetch`, used for same-origin and WASM loading only), `keepAlive`,
 `document` (for the Snowflake frame; default `globalThis.document`).
 
@@ -55,6 +56,20 @@ stored by cors-rot and removed from error messages. Where you keep it is your de
 supplies it can read it, like any page secret). The node's own state (machine/node keys) still goes to
 `tailscale.storage`.
 
+### Tor bridge
+
+The Tor Project runs two Snowflake bridges, `snowflake-01` (`wss://snowflake.torproject.net/`,
+`2B280B23…`) and `snowflake-02` (`wss://02.snowflake.torproject.net/`, `8838024498…`). By default
+(`tor: { bridge: 'random' }`) the first Tor start picks one at random and remembers it under
+`cors-rot.tor.bridge` in `tor.storage` (default `localStorage`); later starts, also after reloads, reuse
+it, like Tor's guard. `bridge: 'snowflake-01'` or `'snowflake-02'` fixes the choice. The Tor handshake
+verifies the bridge's identity. `getStatus().torBridge` names the bridge in use (`null` before the first
+start). When a start on the randomly picked bridge fails, the same start tries the other bridge once and
+remembers it if it works (`getStatus().torBridgeFailover` = `{ bridge, error }` of the failed one; it is
+`null` when no switch was needed). A fixed `bridge` is never switched. The retry is part of the same
+start, so a request waiting for it can hit its own `bootstrapTimeoutMs` first; the start keeps going
+and the next request uses it. The list is exported as `SNOWFLAKE_BRIDGES`, the choice as `chooseSnowflakeBridge()`.
+
 ### Stopping and disposing
 
 | Call | Releases |
@@ -70,7 +85,7 @@ user-facing off switch for it while Tor is in use, `stop()` is for tearing the s
 
 ### Lower-level exports (`src/index.js`)
 
-`createBrowserNetwork`, `createTorClientOptions`, `createConnectionPool`, `poolKey`, `requestHttp`,
+`createBrowserNetwork`, `createTorClientOptions`, `chooseSnowflakeBridge`, `SNOWFLAKE_BRIDGES`, `createConnectionPool`, `poolKey`, `requestHttp`,
 `validateHeaders`, `validateHttpUrl`, `createTailscaleManager`, `createSnowflakeProxy`,
 `loadTorDirectory`, `saveTorDirectory`, `createGitHttp` (an `isomorphic-git` `http` plugin backed by
 any fetch; `isomorphic-git` itself is **not** bundled).
@@ -83,7 +98,7 @@ any fetch; `isomorphic-git` itself is **not** bundled).
   framed as HTTP/1.1 over a `connect()`/`connectTls()` stream that the WASM client proxies through the
   user's exit node. TLS for HTTPS is terminated **in the page** by Go's `crypto/tls`.
 - **Tor transport.** `createBrowserNetwork()` lazily loads `src/vendor/webtor/` (patched `webtor-rs`). It
-  opens a **WebSocket** to a public Snowflake bridge, downloads and authenticates the Tor network
+  opens a **WebSocket** to one of the two public Snowflake bridges (see *Tor bridge*), downloads and authenticates the Tor network
   directory over Tor (~20–30 MB on a cold start; cached in IndexedDB by `tor-cache.js` and re-verified
   on every use), builds a circuit, and runs HTTP/1.1 over Tor streams. HTTPS is terminated **in the
   page** by rustls/webpki (TLS 1.3 only, Mozilla roots).
