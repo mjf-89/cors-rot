@@ -2,7 +2,7 @@
 // Two transports only (tailscale|tor); there is no direct/auto route to test.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createBrowserNetwork, createTorClientOptions } from '../src/network.js';
+import { createBrowserNetwork, createTorClientOptions, chooseSnowflakeBridge, SNOWFLAKE_BRIDGES } from '../src/network.js';
 import { readFile } from 'node:fs/promises';
 import { requestHttp } from '../src/http-stream.js';
 
@@ -407,6 +407,11 @@ test('offline production WASM loader options supply a Snowflake URL and retain t
     assert.ok(configured instanceof module.TorClientOptions);
     assert.notEqual(configured, options);
     assert.ok(configured.__wbg_ptr > 0, 'returned loader options must remain usable');
+    for (const bridge of SNOWFLAKE_BRIDGES) {
+      const chosen = createTorClientOptions(module, { bridge });
+      assert.ok(chosen instanceof module.TorClientOptions && chosen.__wbg_ptr > 0, `${bridge.id} options build`);
+      chosen.free();
+    }
 
     const network = createBrowserNetwork({ mode: 'tor', nativeFetch: denyNetwork });
     assert.equal(network.getStatus().torAvailable, true);
@@ -553,4 +558,56 @@ test('tailscale mode: requests go through the Tailscale client (own keep-alive p
   assert.equal(fixture.created, 0, 'Tor client never created');
   assert.equal(fixture.network.getStatus().recentTorRequests[0].via, 'tailscale');
   assert.equal((await fixture.network.preconnect('https://api.example.test')).reason, 'already-warm');
+});
+
+function memoryStorage(initial = {}) {
+  const data = new Map(Object.entries(initial));
+  return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, String(v)), removeItem: (k) => data.delete(k) };
+}
+
+test('Snowflake bridges: two Tor Project bridges with distinct URLs and 40-hex identities', () => {
+  assert.equal(SNOWFLAKE_BRIDGES.length, 2);
+  assert.deepEqual(SNOWFLAKE_BRIDGES.map((b) => b.id), ['snowflake-01', 'snowflake-02']);
+  assert.equal(new Set(SNOWFLAKE_BRIDGES.map((b) => b.url)).size, 2);
+  for (const b of SNOWFLAKE_BRIDGES) { assert.match(b.fingerprint, /^[0-9A-F]{40}$/); assert.match(b.url, /^wss:\/\//); }
+});
+
+test('chooseSnowflakeBridge: random pick is remembered and reused; fixed ids win; bad values are refused', () => {
+  const storage = memoryStorage();
+  const first = chooseSnowflakeBridge({ storage, random: () => 1 });
+  assert.equal(first.id, 'snowflake-02');
+  assert.equal(storage.data.get('cors-rot.tor.bridge'), 'snowflake-02');
+  assert.equal(chooseSnowflakeBridge({ storage, random: () => 0 }).id, 'snowflake-02', 'sticky after the first pick');
+  storage.data.set('cors-rot.tor.bridge', 'bogus');
+  assert.equal(chooseSnowflakeBridge({ storage, random: () => 0 }).id, 'snowflake-01', 'unknown stored id re-picks');
+  assert.equal(chooseSnowflakeBridge({ preference: 'snowflake-02', storage, random: () => 0 }).id, 'snowflake-02');
+  assert.equal(storage.data.get('cors-rot.tor.bridge'), 'snowflake-01', 'a fixed choice does not overwrite the stored pick');
+  assert.throws(() => chooseSnowflakeBridge({ preference: 'elsewhere' }), /Unknown Snowflake bridge/);
+  const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+  assert.ok(SNOWFLAKE_BRIDGES.includes(chooseSnowflakeBridge({ storage: broken })), 'works without storage (crypto random)');
+  const seen = new Set();
+  for (let i = 0; i < 64; i++) seen.add(chooseSnowflakeBridge({ storage: null }).id);
+  assert.equal(seen.size, 2, 'default random source reaches both bridges');
+});
+
+test('Tor start: the chosen bridge reaches the client factory and the status; bridge option validated', async () => {
+  const storage = memoryStorage({ 'cors-rot.tor.bridge': 'snowflake-02' });
+  let received;
+  const network = createBrowserNetwork({ mode: 'tor', storage, nativeFetch: async () => { throw new Error('unexpected'); },
+    createTorClient: async ({ bridge }) => { received = bridge; return { async waitForCircuit() {} }; } });
+  assert.equal(network.getStatus().torBridge, null, 'nothing chosen before the first start');
+  network.warmUp();
+  await sleep(10);
+  assert.equal(received?.id, 'snowflake-02');
+  assert.equal(network.getStatus().torBridge, 'snowflake-02');
+  await network.stopTor();
+  network.warmUp();
+  await sleep(10);
+  assert.equal(network.getStatus().torBridge, 'snowflake-02', 'restart keeps the same bridge');
+  assert.throws(() => createBrowserNetwork({ mode: 'tor', bridge: 'nope' }), /Invalid bridge/);
+  const fixed = createBrowserNetwork({ mode: 'tor', bridge: 'snowflake-01', storage, nativeFetch: async () => {},
+    createTorClient: async ({ bridge }) => { received = bridge; return { async waitForCircuit() {} }; } });
+  fixed.warmUp();
+  await sleep(10);
+  assert.equal(received.id, 'snowflake-01');
 });
